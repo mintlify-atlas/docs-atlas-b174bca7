@@ -1,0 +1,125 @@
+---
+title: "NewTextee"
+description: "Construct a fully analyzed Textee from one or more input strings."
+---
+
+`NewTextee` is the primary constructor for the `Textee` type. It accepts one or more strings, joins them, runs `ParseString` to extract all substrings and their occurrence counts, and then runs `CalculateGematria` to compute gematria scores for every substring. When `NewTextee` returns without error, the resulting `*Textee` is fully populated and ready to query.
+
+## Signature
+
+```go
+func NewTextee(in ...string) (*Textee, error)
+```
+
+## Parameters
+
+<ParamField path="in" type="...string" required>
+  One or more input strings. All values are joined with a single space (`" "`) before processing. Passing `nil` or calling with no arguments returns `ErrEmptyInput`.
+</ParamField>
+
+## Return values
+
+<ResponseField name="*Textee" type="*Textee">
+  A fully initialized Textee. The following fields are populated on success:
+
+  - `Input` — the joined input string
+  - `Gematria` — gematria scores for the full input string
+  - `Substrings` — map of every 1-, 2-, and 3-word n-gram to its occurrence count
+  - `Gematrias` — gematria scores keyed by substring
+  - `ScoresEnglish`, `ScoresJewish`, `ScoresSimple`, `ScoresMystery`, `ScoresMajestic`, `ScoresEights` — inverted index maps from score value to the list of substrings that produced it
+</ResponseField>
+
+<ResponseField name="error" type="error">
+  Non-nil when construction fails. See the errors section below.
+</ResponseField>
+
+## Errors
+
+| Error | Condition |
+|-------|-----------|
+| `ErrEmptyInput` | `in` is `nil` |
+| `ErrBadParsing` (joined with underlying error) | `ParseString` fails during sentence splitting or n-gram cleaning |
+| `ErrBadParsing` (joined with underlying error) | `CalculateGematria` fails to score one or more substrings |
+
+<Note>
+  `NewTextee` uses `errors.Join` when wrapping errors, so you can inspect both the sentinel (`ErrBadParsing`) and the underlying cause in a single error value.
+</Note>
+
+## Behavior
+
+Internally, `NewTextee` performs these steps in order:
+
+1. Returns `ErrEmptyInput` if `in == nil`.
+2. Joins `in` with `" "` to form the input string.
+3. Calls `gematria.NewGematria` on the full input string and stores the result in `tt.Gematria`.
+4. Calls `tt.ParseString(payload)` — this populates `tt.Substrings` with all n-grams and their counts.
+5. Calls `tt.CalculateGematria()` — this populates `tt.Gematrias` and all six score maps.
+
+## Basic usage
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+    "errors"
+
+    "github.com/andreimerlescu/textee"
+)
+
+const inputString = `All right let's move from this point on 16 March 84, let's move in time to our second location which is a specific building near where you are now. Are you ready? Just a minute. All. right, I will wait. All right, move now from this area to the front ground level of the building known as the Menara Building, to the front of, on the ground, the Menara Building.`
+
+func main() {
+    tt, err := textee.NewTextee(inputString)
+    if err != nil {
+        _, _ = fmt.Fprintf(os.Stderr, "%v\n", errors.Join(textee.ErrBadParsing, err))
+        os.Exit(1)
+    }
+
+    // tt.Substrings, tt.Gematrias, and all six score maps are now populated.
+    fmt.Println(tt)
+}
+```
+
+## Passing multiple strings
+
+When you pass more than one argument, all values are joined with a single space before processing. The effect is identical to passing one pre-joined string.
+
+```go
+tt, err := textee.NewTextee("hello world", "foo bar")
+// equivalent to: textee.NewTextee("hello world foo bar")
+if err != nil {
+    // handle error
+}
+```
+
+## Iterating substrings after construction
+
+```go
+tt, err := textee.NewTextee("manifesting three six nine")
+if err != nil {
+    // handle error
+}
+
+for substring, counter := range tt.Substrings {
+    fmt.Printf("substring %q appears %d time(s)\n", substring, counter.Load())
+}
+```
+
+## Querying the score maps after construction
+
+```go
+tt, err := textee.NewTextee("manifesting three six nine")
+if err != nil {
+    // handle error
+}
+
+// Find all substrings whose English gematria score is 702.
+matches := tt.ScoresEnglish[702]
+fmt.Println(matches) // e.g. ["manifesting"]
+```
+
+<Tip>
+  If you only need substring counts without gematria scores, you can call `ParseString` directly on a manually constructed `Textee` and skip `CalculateGematria`. `NewTextee` is the convenient all-in-one path.
+</Tip>

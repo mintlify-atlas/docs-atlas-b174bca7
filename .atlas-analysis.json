@@ -1,0 +1,61 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Textee",
+  "projectDescription": "A Go library for analyzing text strings through substring grouping, occurrence counting, and multi-cipher gematria scoring.",
+  "theme": "luma",
+  "primaryColor": "#ffffff",
+  "lightColor": "#74d7ed",
+  "darkColor": "#38484e",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart"]
+          },
+          {
+            "group": "Guides",
+            "pages": ["guides/substring-analysis", "guides/gematria", "guides/sorting-results", "guides/concurrency"]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": ["api/newtextee", "api/parsestring", "api/calculategematria", "api/sortedsubstrings", "api/string"]
+          },
+          {
+            "group": "Types",
+            "pages": ["api/types", "api/errors"]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Substring grouping with 1-3 word n-gram extraction",
+    "Concurrent processing with goroutines and sync primitives",
+    "Multi-cipher gematria scoring: English, Jewish, Simple, Mystery, Majestic, Eights",
+    "Thread-safe occurrence counting with atomic.Int32",
+    "Sorted results by occurrence frequency",
+    "Sentence-aware text splitting before substring analysis"
+  ],
+  "publicApiSurface": [
+    "NewTextee(in ...string) (*Textee, error)",
+    "(*Textee).ParseString(input string) (*Textee, error)",
+    "(*Textee).CalculateGematria() (*Textee, error)",
+    "(*Textee).SortedSubstrings() SortedStringQuantities",
+    "(*Textee).String() string",
+    "Textee struct",
+    "SubstringQuantity struct",
+    "SortedStringQuantities type",
+    "ErrEmptyInput",
+    "ErrGematriaParse",
+    "ErrRegexpMissing",
+    "ErrBadParsing"
+  ]
+}

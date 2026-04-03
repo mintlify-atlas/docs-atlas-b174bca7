@@ -1,0 +1,100 @@
+---
+title: "Errors"
+description: "All exported error values and how to handle them."
+---
+
+The `textee` package defines four exported sentinel errors, each typed as a distinct [error alias](/api/types#error-type-aliases). Using typed errors lets you distinguish failure categories with a type assertion rather than string comparison.
+
+## Sentinel errors
+
+<ResponseField name="ErrEmptyInput" type="ArgumentError">
+  **Value:** `"empty input"`
+
+  Returned by `NewTextee` when called with no arguments (the internal `in` slice is `nil`). Check for this error first when constructing a `Textee` from user-supplied input.
+
+  ```go
+  tt, err := textee.NewTextee()
+  // err == textee.ErrEmptyInput
+  ```
+</ResponseField>
+
+<ResponseField name="ErrGematriaParse" type="GematriaError">
+  **Value:** `"unable to parse gematria for value"`
+
+  Returned by `CalculateGematria` when the gematria library cannot produce a value for a given substring. This typically indicates a substring that contains no scoreable characters after cleaning.
+</ResponseField>
+
+<ResponseField name="ErrRegexpMissing" type="RegexpError">
+  **Value:** `"regexp compile result missing"`
+
+  Returned internally by `stringToSentenceSlice` and `cleanSubstring` when a package-level compiled regexp is unexpectedly `nil`.
+
+  <Warning>
+    This error should not occur in practice. Both regexps are compiled with `regexp.MustCompile` at package initialisation and will panic at startup if the pattern is invalid. If you encounter this error at runtime, it indicates a severe internal inconsistency and the process should be treated as unhealthy.
+  </Warning>
+</ResponseField>
+
+<ResponseField name="ErrBadParsing" type="ParseError">
+  **Value:** `"failed to parse the string"`
+
+  Used as the base error when `ParseString` or `CalculateGematria` fail. The package wraps the underlying cause using `errors.Join`, so `errors.Is` and `errors.As` work correctly on the combined error.
+</ResponseField>
+
+---
+
+## Error handling pattern
+
+<Tip>
+  Always wrap returned errors with `ErrBadParsing` when propagating them, so callers can identify the failure stage with a single `errors.Is` check while still preserving the original cause.
+</Tip>
+
+```go
+import (
+    "errors"
+    "fmt"
+    "os"
+
+    "github.com/andreimerlescu/textee"
+)
+
+tt, err := textee.NewTextee(inputString)
+if err != nil {
+    _, _ = fmt.Fprintf(os.Stderr, "%v", errors.Join(textee.ErrBadParsing, err))
+}
+```
+
+When `errors.Join` combines `ErrBadParsing` with the underlying error, both are preserved in the error tree. You can therefore unwrap or inspect either:
+
+```go
+if errors.Is(err, textee.ErrEmptyInput) {
+    // caller passed nil input
+}
+
+if errors.Is(err, textee.ErrBadParsing) {
+    // parsing stage failed — inspect further for root cause
+}
+```
+
+---
+
+## Type assertions
+
+Because each sentinel is a distinct named type, you can branch on the error category without matching strings:
+
+```go
+var argErr textee.ArgumentError
+var gemErr textee.GematriaError
+
+switch {
+case errors.As(err, &argErr):
+    // handle bad argument
+case errors.As(err, &gemErr):
+    // handle gematria computation failure
+default:
+    // unknown error
+}
+```
+
+<Note>
+  `errors.As` traverses the full error chain produced by `errors.Join`, so it works correctly even when the sentinel is wrapped inside a `ParseError`.
+</Note>

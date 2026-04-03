@@ -1,97 +1,70 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Textee"
+description: "A Go library for analyzing text strings through substring grouping, occurrence counting, and multi-cipher gematria scoring."
 ---
 
-## Setting up
+Textee is a Go package that takes raw text and extracts every 1-, 2-, and 3-word substring, counts how often each appears, and optionally computes six different gematria cipher scores for each substring. It is built for concurrent processing and is safe for use in parallel workloads.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Install the package and run your first text analysis in minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Learn how Textee works and when to use it.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Gematria Guide" icon="calculator" href="/guides/gematria">
+    Understand the six cipher systems and how to query scores.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="API Reference" icon="code" href="/api/newtextee">
+    Explore every exported function, type, and error value.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## How it works
 
-Everything you need to create world-class documentation.
+<Steps>
+  <Step title="Install">
+    Add Textee to your Go module.
+    ```bash
+    go get -u github.com/andreimerlescu/textee
+    ```
+  </Step>
+  <Step title="Parse text">
+    Call `NewTextee` with one or more strings. The library splits the input into sentences, then generates every 1-, 2-, and 3-word n-gram and counts occurrences atomically across goroutines.
+    ```go
+    tt, err := textee.NewTextee("All right, let's move from this point.")
+    ```
+  </Step>
+  <Step title="Read results">
+    Iterate over `tt.Substrings` or call `tt.SortedSubstrings()` to get results ordered from most to least frequent.
+    ```go
+    for _, sq := range tt.SortedSubstrings() {
+        fmt.Printf("%s: %d\n", sq.Substring, sq.Quantity)
+    }
+    ```
+  </Step>
+  <Step title="Add gematria (optional)">
+    Call `tt.CalculateGematria()` to enrich each substring with English, Jewish, Simple, Mystery, Majestic, and Eights cipher scores.
+    ```go
+    tt, err = tt.CalculateGematria()
+    fmt.Println(tt) // prints substrings with all six scores
+    ```
+  </Step>
+</Steps>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Key features
 
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<CardGroup cols={2}>
+  <Card title="N-gram extraction" icon="layer-group" href="/guides/substring-analysis">
+    Automatically generates 1-, 2-, and 3-word substrings from any input text.
+  </Card>
+  <Card title="Concurrent processing" icon="bolt" href="/guides/concurrency">
+    Uses goroutines and sync/atomic for safe, high-throughput analysis.
+  </Card>
+  <Card title="Six gematria ciphers" icon="hashtag" href="/guides/gematria">
+    English, Jewish, Simple, Mystery, Majestic, and Eights scores per substring.
+  </Card>
+  <Card title="Sorted output" icon="arrow-down-wide-short" href="/guides/sorting-results">
+    SortedSubstrings() returns results ranked by occurrence frequency.
+  </Card>
+</CardGroup>

@@ -1,0 +1,188 @@
+---
+title: "Substring Analysis"
+description: "How Textee extracts and counts 1-, 2-, and 3-word substrings from text."
+---
+
+`ParseString` is the core of Textee. It splits input text into sentences, tokenizes each sentence into words, generates n-grams of width 1, 2, and 3, cleans each n-gram, and stores occurrence counts in an atomic-safe map. This page walks through every step of that pipeline.
+
+## Step 1 — Sentence splitting
+
+`ParseString` calls `stringToSentenceSlice`, which applies this compiled regex to the input:
+
+```go
+var regFindSentences = regexp.MustCompile(`(?m)([^.!?]*[.!?])(?:\s|$)`)
+```
+
+The regex matches any run of non-terminal characters followed by `.`, `!`, or `?`, and then either whitespace or end-of-string. Every match becomes one sentence.
+
+<Note>
+If the regex finds no matches — meaning the input contains no `.`, `!`, or `?` — the entire input string is returned as a single-element slice. The text is never silently dropped.
+</Note>
+
+```go
+func stringToSentenceSlice(text string) ([]string, error) {
+    if regFindSentences == nil {
+        return nil, ErrRegexpMissing
+    }
+    matches := regFindSentences.FindAllString(text, -1)
+    for i, match := range matches {
+        matches[i] = strings.TrimSpace(match)
+    }
+    if len(matches) == 0 {
+        return []string{text}, nil
+    }
+    return matches, nil
+}
+```
+
+## Step 2 — Word tokenization
+
+For each sentence, `strings.Fields` splits on any run of whitespace. This handles multiple spaces, tabs, and mixed spacing without any extra configuration.
+
+```go
+words := strings.Fields(sentence)
+```
+
+`strings.Fields("Hello   world\tfoo")` returns `["Hello", "world", "foo"]`.
+
+## Step 3 — Sliding window n-gram generation
+
+A nested loop generates all 1-, 2-, and 3-word n-grams starting at every word position:
+
+```go
+for i := 0; i < len(words); i++ {
+    for j := i + 1; j <= i+3 && j <= len(words); j++ {
+        substring := strings.Join(words[i:j], " ")
+        // ...
+    }
+}
+```
+
+The inner bound `j <= i+3` caps the window at three words. The slice `words[i:j]` is joined with a single space to form the raw n-gram string.
+
+## Step 4 — Cleaning each n-gram
+
+Two transformations are applied to every raw n-gram before storage:
+
+1. **Strip non-alphanumeric characters** — the regex `[^a-zA-Z0-9\s]` removes all punctuation, apostrophes, hyphens, and special characters.
+2. **Lowercase and trim** — `strings.ToLower` and `strings.TrimSpace` normalize the result.
+
+```go
+var regCleanSubstring = regexp.MustCompile(`[^a-zA-Z0-9\s]`)
+
+func cleanSubstring(word string) (string, error) {
+    if regCleanSubstring == nil {
+        return "", ErrRegexpMissing
+    }
+    word = strings.TrimSpace(word)
+    return regCleanSubstring.ReplaceAllString(word, ""), nil
+}
+```
+
+After calling `cleanSubstring`, `ParseString` applies the remaining two steps:
+
+```go
+cleanedSubstring = strings.ToLower(cleanedSubstring)
+cleanedSubstring = strings.TrimSpace(cleanedSubstring)
+```
+
+Empty strings that result from cleaning (e.g., a token made entirely of punctuation) are skipped:
+
+```go
+if cleanedSubstring != "" {
+    // store in map
+}
+```
+
+## Step 5 — Atomic occurrence counting
+
+The `Substrings` field is `map[string]*atomic.Int32`. On first encounter a new `*atomic.Int32` is allocated; on every subsequent encounter `Add(1)` increments the counter. A mutex guards map reads and writes while the per-value increment is lock-free:
+
+```go
+tt.mu.Lock()
+if _, ok := tt.Substrings[cleanedSubstring]; !ok {
+    tt.Substrings[cleanedSubstring] = new(atomic.Int32)
+}
+tt.Substrings[cleanedSubstring].Add(1)
+tt.mu.Unlock()
+```
+
+## Worked example
+
+<Steps>
+  <Step title="Input">
+    ```txt
+    Hello world foo bar
+    ```
+    No sentence-ending punctuation is present, so `stringToSentenceSlice` returns the whole string as one sentence.
+  </Step>
+  <Step title="Tokenize">
+    ```go
+    words := strings.Fields("Hello world foo bar")
+    // words = ["Hello", "world", "foo", "bar"]
+    ```
+  </Step>
+  <Step title="Generate n-grams">
+    The sliding window at each position `i` produces:
+
+    | i | j range | Raw n-gram |
+    |---|---------|-----------|
+    | 0 | 1       | `"Hello"` |
+    | 0 | 2       | `"Hello world"` |
+    | 0 | 3       | `"Hello world foo"` |
+    | 1 | 2       | `"world"` |
+    | 1 | 3       | `"world foo"` |
+    | 1 | 4       | `"world foo bar"` |
+    | 2 | 3       | `"foo"` |
+    | 2 | 4       | `"foo bar"` |
+    | 3 | 4       | `"bar"` |
+  </Step>
+  <Step title="Clean and store">
+    After lowercasing (no punctuation to strip in this example):
+
+    ```txt
+    "hello"           → 1
+    "hello world"     → 1
+    "hello world foo" → 1
+    "world"           → 1
+    "world foo"       → 1
+    "world foo bar"   → 1
+    "foo"             → 1
+    "foo bar"         → 1
+    "bar"             → 1
+    ```
+
+    Each appears exactly once because the input has no repeated words.
+  </Step>
+</Steps>
+
+## Accessing the raw `Substrings` map
+
+After calling `NewTextee` (or `ParseString` directly), the `Substrings` field is safe to read — provided no concurrent mutation is happening. Call `.Load()` on each value to retrieve the current count:
+
+```go
+tt, err := textee.NewTextee("Hello world foo bar")
+if err != nil {
+    log.Fatal(err)
+}
+
+for substring, counter := range tt.Substrings {
+    fmt.Printf("%q: %d\n", substring, counter.Load())
+}
+```
+
+<Tip>
+Map iteration order in Go is randomized. If you need a stable ordering — e.g., most-frequent first — use `tt.SortedSubstrings()` instead. See the [Sorting Results](/guides/sorting-results) guide for details.
+</Tip>
+
+## Error handling
+
+`ParseString` collects `CleanError` values from the cleaning step and joins them with `errors.Join` before returning. This means a single bad token does not abort processing — other substrings are still counted. Check the returned error before using the result:
+
+```go
+tt, err := textee.NewTextee(input)
+if err != nil {
+    // errors.Is / errors.As work with the joined error tree
+    log.Fatal(err)
+}
+```

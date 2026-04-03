@@ -1,0 +1,160 @@
+---
+title: "Gematria Scoring"
+description: "Using the six gematria cipher systems built into Textee."
+---
+
+Gematria is a numerological system that assigns numeric values to letters and sums them to produce a score for a word or phrase. Textee computes gematria scores for every extracted substring and organizes the results into six cipher-specific index maps, making it straightforward to compare substrings across cipher systems or to find all substrings that share a given score.
+
+## The six cipher systems
+
+Textee tracks six ciphers, all sourced from the `github.com/andreimerlescu/gematria` package. Each corresponds to a field on the `gematria.Gematria` struct and a dedicated score-index map on `Textee`:
+
+<CardGroup cols={2}>
+  <Card title="English" icon="e">
+    Standard English gematria. Stored in `tt.ScoresEnglish map[uint64][]string`.
+  </Card>
+  <Card title="Jewish" icon="j">
+    Jewish / Hebrew cipher. Stored in `tt.ScoresJewish map[uint64][]string`.
+  </Card>
+  <Card title="Simple" icon="s">
+    Simple A=1 … Z=26 cipher. Stored in `tt.ScoresSimple map[uint64][]string`.
+  </Card>
+  <Card title="Mystery" icon="m">
+    Mystery cipher. Stored in `tt.ScoresMystery map[uint64][]string`.
+  </Card>
+  <Card title="Majestic" icon="M">
+    Majestic cipher. Stored in `tt.ScoresMajestic map[uint64][]string`.
+  </Card>
+  <Card title="Eights" icon="8">
+    Eights cipher. Stored in `tt.ScoresEights map[uint64][]string`.
+  </Card>
+</CardGroup>
+
+## How `CalculateGematria` works
+
+`CalculateGematria` acquires the write lock on `tt.mu` for its entire duration, then iterates over every key in `tt.Substrings`. For each substring it:
+
+1. Calls `gematria.NewGematria(substring)` to obtain a `gematria.Gematria` value with six numeric scores.
+2. Appends the substring to each of six local inverted-index maps under its score key.
+3. Stores the full `gematria.Gematria` struct in `tt.Gematrias[substring]`.
+
+After the loop completes successfully, all six local maps are assigned back to `tt` (`tt.ScoresEnglish`, `tt.ScoresJewish`, etc.), atomically replacing any previous values. If any substring fails to score, the accumulated errors are returned and the score maps are **not** updated — they retain their previous values.
+
+Results are stored in two places:
+
+- `tt.Gematrias[substring]` — the full `gematria.Gematria` struct for that substring.
+- Six score-index maps — each maps a `uint64` score to the list of substrings that share it.
+
+<Note>
+`NewTextee` already calls both `ParseString` and `CalculateGematria` internally before returning. The `*Textee` you receive is fully populated — you do not need to call `CalculateGematria` again unless you have re-parsed the input with `ParseString`.
+</Note>
+
+## Test case: "manifesting three six nine"
+
+The test suite in `textee_test.go` verifies the following scores for the substring `"manifesting"` extracted from the phrase `"manifesting three six nine"`:
+
+```go
+tt, err := textee.NewTextee("manifesting three six nine")
+// err == nil
+
+want := gematria.Gematria{
+    English: 702,
+    Jewish:  337,
+    Simple:  117,
+}
+// reflect.DeepEqual(tt.Gematrias["manifesting"], want) == true
+```
+
+The Mystery, Majestic, and Eights fields default to zero in this test — the `go-gematria` library only populates the fields for which it has a table entry.
+
+## Looking up scores for a single substring
+
+After construction, index into `tt.Gematrias` directly with the cleaned, lowercased substring key:
+
+```go
+tt, err := textee.NewTextee("manifesting three six nine")
+if err != nil {
+    log.Fatal(err)
+}
+
+gem := tt.Gematrias["manifesting"]
+fmt.Printf("English:  %d\n", gem.English)  // 702
+fmt.Printf("Jewish:   %d\n", gem.Jewish)   // 337
+fmt.Printf("Simple:   %d\n", gem.Simple)   // 117
+fmt.Printf("Mystery:  %d\n", gem.Mystery)
+fmt.Printf("Majestic: %d\n", gem.Majestic)
+fmt.Printf("Eights:   %d\n", gem.Eights)
+```
+
+<Tip>
+All substrings in `tt.Gematrias` are lowercase and stripped of non-alphanumeric characters — the same transformations applied by `cleanSubstring`. Always use a cleaned, lowercased key when looking up values.
+</Tip>
+
+## Finding all substrings with the same English score
+
+The score-index maps invert the lookup: given a score, retrieve every substring that produced it.
+
+```go
+tt, err := textee.NewTextee("manifesting three six nine")
+if err != nil {
+    log.Fatal(err)
+}
+
+// All substrings whose English gematria score equals 702
+const targetScore uint64 = 702
+matches := tt.ScoresEnglish[targetScore]
+fmt.Printf("Substrings with English score %d:\n", targetScore)
+for _, s := range matches {
+    fmt.Printf("  %q\n", s)
+}
+```
+
+The same pattern applies to every other cipher — replace `ScoresEnglish` with `ScoresJewish`, `ScoresSimple`, `ScoresMystery`, `ScoresMajestic`, or `ScoresEights` as needed:
+
+```go
+// Jewish score 337
+for _, s := range tt.ScoresJewish[337] {
+    fmt.Println(s)
+}
+
+// Simple score 117
+for _, s := range tt.ScoresSimple[117] {
+    fmt.Println(s)
+}
+```
+
+## Formatted output with `String()`
+
+The `String()` method on `*Textee` iterates over `SortedSubstrings()` and formats all six scores inline when gematria data is present:
+
+```go
+fmt.Println(tt)
+```
+
+Output format (one line per substring, sorted by occurrence frequency). The one score verified by the test suite is `"manifesting"` with English=702, Jewish=337, Simple=117:
+
+```txt
+"manifesting": 1 [English 702] [Jewish 337] [Simple 117] [Mystery 0] [Majestic 0] [Eights 0]
+"three six nine": 1 [English N] [Jewish N] [Simple N] [Mystery N] [Majestic N] [Eights N]
+"manifesting three": 1 [English N] [Jewish N] [Simple N] [Mystery N] [Majestic N] [Eights N]
+...
+```
+
+The format string used internally is:
+
+```go
+fmt.Sprintf(
+    "\"%v\": %d [English %d] [Jewish %d] [Simple %d] [Mystery %d] [Majestic %d] [Eights %d]\n",
+    data.Substring, data.Quantity,
+    tt.Gematrias[data.Substring].English,
+    tt.Gematrias[data.Substring].Jewish,
+    tt.Gematrias[data.Substring].Simple,
+    tt.Gematrias[data.Substring].Mystery,
+    tt.Gematrias[data.Substring].Majestic,
+    tt.Gematrias[data.Substring].Eights,
+)
+```
+
+<Warning>
+If `ScoresEnglish`, `ScoresJewish`, and `ScoresSimple` are all empty, `String()` omits the score columns and prints only the substring and its count. This can happen if you called `ParseString` after `NewTextee` without re-running `CalculateGematria`.
+</Warning>

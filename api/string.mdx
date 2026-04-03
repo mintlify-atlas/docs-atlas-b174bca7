@@ -1,0 +1,144 @@
+---
+title: "String"
+description: "Format a Textee as a human-readable string with counts and gematria scores."
+---
+
+`String` implements the `fmt.Stringer` interface for `*Textee`. It produces a multi-line text representation of all substrings sorted by occurrence frequency. When gematria scores are available, each line includes all six cipher values alongside the occurrence count.
+
+## Signature
+
+```go
+func (tt *Textee) String() string
+```
+
+## Parameters
+
+This method takes no parameters beyond the receiver.
+
+## Return value
+
+<ResponseField name="string" type="string">
+  A multi-line string. Each line represents one substring. Returns an empty string if `tt.Substrings` is empty.
+</ResponseField>
+
+## Behavior
+
+### Empty guard
+
+If `len(tt.Substrings) == 0`, `String` returns `""` immediately without allocating a builder.
+
+### Gematria detection
+
+`String` checks whether any of the three primary score maps are non-empty to decide which format to use:
+
+```go
+hasGematria := len(tt.ScoresEnglish) > 0 || len(tt.ScoresJewish) > 0 || len(tt.ScoresSimple) > 0
+```
+
+If `hasGematria` is `true`, scores are included in the output. If all three maps are empty (e.g., `ParseString` was called but `CalculateGematria` was not), only the count is shown.
+
+### Line format with gematria
+
+```
+"<substring>": <count> [English N] [Jewish N] [Simple N] [Mystery N] [Majestic N] [Eights N]
+```
+
+### Line format without gematria
+
+```
+"<substring>": <count>
+```
+
+### Ordering
+
+Lines are produced in the order returned by `SortedSubstrings` — descending by occurrence count. Substrings with equal counts appear in an undefined order.
+
+<Note>
+  `String` calls `SortedSubstrings` internally, which acquires a read lock on `tt.mu`. The method is safe to call concurrently with other read operations, but will block while a write lock is held (e.g., during `CalculateGematria`).
+</Note>
+
+## Example: with gematria
+
+Using the README example input:
+
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+    "errors"
+
+    "github.com/andreimerlescu/textee"
+)
+
+const inputString = `All right let's move from this point on 16 March 84, let's move in time to our second location which is a specific building near where you are now. Are you ready? Just a minute. All. right, I will wait. All right, move now from this area to the front ground level of the building known as the Menara Building, to the front of, on the ground, the Menara Building.`
+
+func main() {
+    tt, err := textee.NewTextee(inputString)
+    if err != nil {
+        _, _ = fmt.Fprintf(os.Stderr, "%v\n", errors.Join(textee.ErrBadParsing, err))
+        os.Exit(1)
+    }
+    fmt.Println(tt)
+}
+```
+
+A partial excerpt of the output (most frequent substrings first — exact cipher values depend on the `go-gematria` library):
+
+```txt
+"building": 4 [English N] [Jewish N] [Simple N] [Mystery N] [Majestic N] [Eights N]
+"the": 4 [English N] [Jewish N] [Simple N] [Mystery N] [Majestic N] [Eights N]
+"menara building": 3 [English N] [Jewish N] [Simple N] [Mystery N] [Majestic N] [Eights N]
+"move": 3 [English N] [Jewish N] [Simple N] [Mystery N] [Majestic N] [Eights N]
+...
+```
+
+The one verified score from the test suite: `"manifesting"` has English=702, Jewish=337, Simple=117.
+
+## Example: without gematria
+
+If you call `ParseString` directly without following up with `CalculateGematria`, the output omits the score columns:
+
+```go
+tt, err := textee.NewTextee("placeholder")
+if err != nil {
+    // handle error
+}
+
+tt, err = tt.ParseString("All right, move now.")
+if err != nil {
+    // handle error
+}
+
+// CalculateGematria has NOT been called, so ScoresEnglish etc. are empty.
+fmt.Println(tt)
+```
+
+```txt
+"move": 1
+"right move": 1
+"all right": 1
+"right": 1
+"all": 1
+"right move now": 1
+"move now": 1
+"all right move": 1
+"now": 1
+```
+
+## Using String with fmt
+
+Because `*Textee` implements `fmt.Stringer`, you can pass it directly to any `fmt` verb that accepts an interface:
+
+```go
+tt, _ := textee.NewTextee("manifesting three six nine")
+fmt.Println(tt)          // calls tt.String() automatically
+fmt.Printf("%v\n", tt)  // equivalent
+s := tt.String()         // explicit call
+_ = s
+```
+
+<Tip>
+  For programmatic access to individual substrings and their scores, iterate `tt.SortedSubstrings()` and look up each entry in `tt.Gematrias` directly. Use `String` only when you want a quick human-readable summary.
+</Tip>

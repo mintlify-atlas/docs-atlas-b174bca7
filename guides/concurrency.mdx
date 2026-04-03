@@ -1,0 +1,152 @@
+---
+title: "Concurrency"
+description: "Thread safety guarantees and the concurrent processing model in Textee."
+---
+
+Textee processes sentences in parallel during parsing and protects its shared state with a combination of a `sync.RWMutex` and per-entry `*atomic.Int32` counters. Understanding the model tells you exactly which operations are safe to call concurrently and which ones must stay sequential.
+
+## Construction with `NewTextee`
+
+`NewTextee` is the recommended entry point. It runs `ParseString` and `CalculateGematria` **sequentially** before returning, so the `*Textee` you receive is fully populated and safe for concurrent reads immediately:
+
+```go
+tt, err := textee.NewTextee("your input text here")
+if err != nil {
+    log.Fatal(err)
+}
+// tt is ready — no further setup required.
+```
+
+## Inside `ParseString` — one goroutine per sentence
+
+`ParseString` spawns one goroutine per detected sentence and waits for all of them with a `sync.WaitGroup`:
+
+```go
+var wg sync.WaitGroup
+for _, sentence := range sentences {
+    wg.Add(1)
+    go func(sentence string) {
+        defer wg.Done()
+        words := strings.Fields(sentence)
+        for i := 0; i < len(words); i++ {
+            for j := i + 1; j <= i+3 && j <= len(words); j++ {
+                // generate, clean, and count each n-gram
+            }
+        }
+    }(sentence)
+}
+wg.Wait()
+```
+
+Every write to `tt.Substrings` inside the goroutines is wrapped in `tt.mu.Lock()` / `tt.mu.Unlock()`. The map itself is therefore safe, but the mutex contention is real — n-gram insertion is the bottleneck for very long inputs.
+
+## Lock-free occurrence counting with `*atomic.Int32`
+
+Once a `*atomic.Int32` pointer is stored in the map, incrementing it does not require holding the mutex:
+
+```go
+tt.mu.Lock()
+if _, ok := tt.Substrings[cleanedSubstring]; !ok {
+    tt.Substrings[cleanedSubstring] = new(atomic.Int32)
+}
+tt.Substrings[cleanedSubstring].Add(1)
+tt.mu.Unlock()
+```
+
+Both the map check/insert and the `Add(1)` happen under the lock here — the insertion path is fully serialized. The benefit of `atomic.Int32` becomes apparent when external code reads counts concurrently: calling `.Load()` on a `*atomic.Int32` is safe without any lock.
+
+## `CalculateGematria` — full write lock for the duration
+
+`CalculateGematria` holds the **write lock** for its entire execution:
+
+```go
+func (tt *Textee) CalculateGematria() (*Textee, error) {
+    tt.mu.Lock()
+    defer tt.mu.Unlock()
+    // ...scores computed and written to tt.Gematrias and score maps...
+    return tt, nil
+}
+```
+
+No other goroutine can read from or write to the mutex-protected fields while scoring runs. This is intentional: the six score-index maps are rebuilt from scratch on every call.
+
+## `SortedSubstrings` — read lock only
+
+`SortedSubstrings` acquires the read lock, which allows multiple goroutines to call it simultaneously:
+
+```go
+func (tt *Textee) SortedSubstrings() SortedStringQuantities {
+    tt.mu.RLock()
+    defer tt.mu.RUnlock()
+    // snapshot the map and sort
+    return sortedQuantities
+}
+```
+
+Multiple concurrent readers are fine; they block only when a writer (`ParseString` or `CalculateGematria`) holds the write lock.
+
+## Safe concurrent read pattern after construction
+
+After `NewTextee` returns, `tt.Gematrias` and the score-index maps are never mutated again (unless you call `ParseString` or `CalculateGematria` again). Reading them from multiple goroutines is safe:
+
+```go
+tt, err := textee.NewTextee("the quick brown fox jumps over the lazy dog")
+if err != nil {
+    log.Fatal(err)
+}
+
+var wg sync.WaitGroup
+for i := 0; i < 8; i++ {
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+
+        // Safe: SortedSubstrings holds a read lock internally.
+        for _, item := range tt.SortedSubstrings() {
+            _ = item.Quantity
+        }
+
+        // Safe: tt.Gematrias is not mutated after NewTextee returns.
+        gem := tt.Gematrias["fox"]
+        _ = gem.English
+    }()
+}
+wg.Wait()
+```
+
+## Unsafe pattern — calling `ParseString` from multiple goroutines
+
+`ParseString` resets `tt.Substrings` to a new empty map at the start of every call:
+
+```go
+tt.mu.Lock()
+tt.Substrings = make(map[string]*atomic.Int32)
+tt.mu.Unlock()
+```
+
+Calling `ParseString` concurrently from two goroutines will cause one goroutine to throw away the other's results, producing incorrect counts. Do not do this:
+
+```go
+// UNSAFE — do not do this
+go func() { tt.ParseString("first input") }()
+go func() { tt.ParseString("second input") }()
+```
+
+<Warning>
+`ParseString` and `CalculateGematria` are **mutating methods**. They must never be called concurrently with each other or with any read that is not protected by `SortedSubstrings()` or another explicit lock.
+</Warning>
+
+## Summary of guarantees
+
+| Operation | Lock acquired | Concurrent callers safe? |
+|---|---|---|
+| `NewTextee` | none (construction) | N/A — creates a new `*Textee` |
+| `ParseString` | `tt.mu` write lock (per entry) | No — resets the map on entry |
+| `CalculateGematria` | `tt.mu` full write lock | No — rebuilds all score maps |
+| `SortedSubstrings` | `tt.mu` read lock | Yes |
+| `tt.Gematrias[key]` read | none | Yes, after `NewTextee` returns |
+| `tt.Substrings[key].Load()` | none | Yes, after `NewTextee` returns |
+
+<Tip>
+For a pipeline that re-parses new text into the same `*Textee`, create a fresh `*Textee` with `NewTextee` rather than calling `ParseString` on an existing instance from multiple goroutines. Each `NewTextee` call is independent and fully self-contained.
+</Tip>

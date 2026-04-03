@@ -1,0 +1,140 @@
+---
+title: "CalculateGematria"
+description: "Compute gematria scores for all extracted substrings."
+---
+
+`CalculateGematria` iterates every entry in `tt.Substrings`, computes gematria scores for each one using `gematria.NewGematria`, and builds six inverted index maps that let you look up all substrings that share a given score value. It is called automatically by `NewTextee`, but you must call it manually if you invoke `ParseString` directly.
+
+## Signature
+
+```go
+func (tt *Textee) CalculateGematria() (*Textee, error)
+```
+
+## Parameters
+
+This method takes no parameters beyond the receiver.
+
+## Return values
+
+<ResponseField name="*Textee" type="*Textee">
+  The same receiver (`tt`) on success. The following fields are fully replaced with new results:
+
+  - `Gematrias` — `map[string]gematria.Gematria` keyed by substring
+  - `ScoresEnglish` — `map[uint64][]string`
+  - `ScoresJewish` — `map[uint64][]string`
+  - `ScoresSimple` — `map[uint64][]string`
+  - `ScoresMystery` — `map[uint64][]string`
+  - `ScoresMajestic` — `map[uint64][]string`
+  - `ScoresEights` — `map[uint64][]string`
+</ResponseField>
+
+<ResponseField name="error" type="error">
+  Non-nil if any substring fails to score. All individual scoring errors are combined using `errors.Join` and wrapped with `ErrGematriaParse`. A non-nil error means the score maps were **not** written to `tt` — the receiver is returned as `nil` in the error case.
+</ResponseField>
+
+## Behavior
+
+### Locking
+
+`CalculateGematria` acquires `tt.mu` (a `sync.RWMutex`) as a write lock for its entire duration. No other goroutine can read or write to the `Textee` while scoring is in progress.
+
+### Scoring loop
+
+For every substring in `tt.Substrings`, the method:
+
+1. Trims leading and trailing whitespace from the substring.
+2. Calls `gematria.NewGematria(substring)` to obtain a `gematria.Gematria` value with six numeric scores.
+3. Appends the substring to each of the six inverted index maps under its corresponding score key.
+4. Stores the full `gematria.Gematria` value in `tt.Gematrias[substring]`.
+
+If `gematria.NewGematria` returns an error for a particular substring, that error is recorded with an `atomic.Int32` counter and the substring is skipped. The loop continues processing remaining substrings.
+
+### Error handling
+
+After the loop, if the error counter is greater than zero, all accumulated errors are joined and returned. In the error path, the six score maps are **not** assigned back to `tt` — they remain as whatever they were before the call.
+
+### Idempotency
+
+<Note>
+  Calling `CalculateGematria` more than once is safe. Each call builds fresh local maps and replaces the fields on `tt` only on success. Results from the previous call are fully replaced.
+</Note>
+
+## Score maps structure
+
+Each of the six maps follows the same pattern: a `uint64` score value maps to a slice of all substrings that produced that score under the corresponding cipher.
+
+| Field | Cipher |
+|-------|--------|
+| `ScoresEnglish` | English gematria |
+| `ScoresJewish` | Jewish gematria |
+| `ScoresSimple` | Simple gematria |
+| `ScoresMystery` | Mystery gematria |
+| `ScoresMajestic` | Majestic gematria |
+| `ScoresEights` | Eights gematria |
+
+## When to call manually
+
+<Warning>
+  `NewTextee` already calls `CalculateGematria` for you. Only call it directly if you used `ParseString` to replace the substrings after construction, or if you want to re-score after any other mutation.
+</Warning>
+
+## Example: calling after ParseString
+
+```go
+package main
+
+import (
+    "fmt"
+
+    "github.com/andreimerlescu/textee"
+)
+
+func main() {
+    tt, err := textee.NewTextee("placeholder")
+    if err != nil {
+        // handle error
+    }
+
+    // Replace substrings with new input.
+    tt, err = tt.ParseString("manifesting three six nine")
+    if err != nil {
+        // handle error
+    }
+
+    // Recompute gematria for the new substrings.
+    tt, err = tt.CalculateGematria()
+    if err != nil {
+        // handle error
+    }
+
+    // tt.Gematrias["manifesting"].English == 702
+    // tt.Gematrias["manifesting"].Jewish  == 337
+    // tt.Gematrias["manifesting"].Simple  == 117
+    g := tt.Gematrias["manifesting"]
+    fmt.Printf("manifesting — English: %d, Jewish: %d, Simple: %d\n",
+        g.English, g.Jewish, g.Simple)
+}
+```
+
+## Example: querying inverted index maps
+
+```go
+// Find every substring whose Simple gematria score is 117.
+substrings := tt.ScoresSimple[117]
+for _, s := range substrings {
+    fmt.Println(s)
+}
+```
+
+## Example: iterating all scores
+
+```go
+for score, substrings := range tt.ScoresEnglish {
+    fmt.Printf("English score %d: %v\n", score, substrings)
+}
+```
+
+<Tip>
+  The inverted index maps are ideal for finding numerological relationships across phrases — all substrings that share a score value appear together under the same key.
+</Tip>

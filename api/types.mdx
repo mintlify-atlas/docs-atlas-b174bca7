@@ -1,0 +1,117 @@
+---
+title: "Types"
+description: "All exported types, structs, and type aliases in the Textee package."
+---
+
+## Textee
+
+The primary struct returned by `NewTextee`. It holds the original input alongside all computed substrings, gematria values, and cipher score maps.
+
+<Note>
+  The `mu` field (`sync.RWMutex`) is unexported. All concurrent access to `Textee` fields is managed internally — you do not need to lock the struct yourself.
+</Note>
+
+<ResponseField name="Input" type="string" required>
+  The original input string passed to `NewTextee`. Serialized as `"in"` in JSON.
+</ResponseField>
+
+<ResponseField name="Gematria" type="gematria.Gematria" required>
+  The gematria value computed for the full `Input` string. Serialized as `"gem"` in JSON.
+</ResponseField>
+
+<ResponseField name="Substrings" type="map[string]*atomic.Int32" required>
+  A map from each unique substring to its occurrence count. Counts are stored as `*atomic.Int32` to support safe concurrent updates. Serialized as `"subs"` in JSON.
+</ResponseField>
+
+<ResponseField name="Gematrias" type="map[string]gematria.Gematria" required>
+  A map from each unique substring to its computed `gematria.Gematria` value. Serialized as `"gems"` in JSON.
+</ResponseField>
+
+<ResponseField name="ScoresEnglish" type="map[uint64][]string" required>
+  Groups substrings by their English cipher value. The key is the cipher score; the value is the list of substrings that share that score. Serialized as `"sen"` in JSON.
+</ResponseField>
+
+<ResponseField name="ScoresJewish" type="map[uint64][]string" required>
+  Groups substrings by their Jewish cipher value. Serialized as `"sje"` in JSON.
+</ResponseField>
+
+<ResponseField name="ScoresSimple" type="map[uint64][]string" required>
+  Groups substrings by their Simple cipher value. Serialized as `"ssi"` in JSON.
+</ResponseField>
+
+<ResponseField name="ScoresMystery" type="map[uint64][]string" required>
+  Groups substrings by their Mystery cipher value. Serialized as `"smy"` in JSON.
+</ResponseField>
+
+<ResponseField name="ScoresMajestic" type="map[uint64][]string" required>
+  Groups substrings by their Majestic cipher value. Serialized as `"smj"` in JSON.
+</ResponseField>
+
+<ResponseField name="ScoresEights" type="map[uint64][]string" required>
+  Groups substrings by their Eights cipher value. Serialized as `"sei"` in JSON.
+</ResponseField>
+
+---
+
+## SubstringQuantity
+
+A value type pairing a substring with its occurrence count. Returned as elements of the slice produced by `SortedSubstrings()`.
+
+<ResponseField name="Substring" type="string" required>
+  The substring text. Serialized as `"s"` in JSON.
+</ResponseField>
+
+<ResponseField name="Quantity" type="int" required>
+  The number of times `Substring` appears in the input. Serialized as `"q"` in JSON.
+</ResponseField>
+
+---
+
+## SortedStringQuantities
+
+```go
+type SortedStringQuantities []SubstringQuantity
+```
+
+A slice of `SubstringQuantity` values that implements `sort.Interface`. Sorting is **descending by `Quantity`** — the most frequent substrings appear first.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `Len` | `() int` | Returns the number of elements. |
+| `Swap` | `(i, j int)` | Swaps elements at positions `i` and `j`. |
+| `Less` | `(i, j int) bool` | Returns `true` when `sq[i].Quantity > sq[j].Quantity`, producing descending order. |
+
+<Tip>
+  Pass a `SortedStringQuantities` value directly to `sort.Sort` to order substrings from most to least frequent.
+
+  ```go
+  sq := SortedStringQuantities(results)
+  sort.Sort(sq)
+  ```
+</Tip>
+
+---
+
+## Error type aliases
+
+These type aliases let callers distinguish error categories with a type assertion without depending on sentinel string matching.
+
+```go
+type ArgumentError error
+type GematriaError error
+type RegexpError  error
+type ParseError   error
+type CleanError   error
+```
+
+| Alias | Category |
+|-------|----------|
+| `ArgumentError` | Invalid arguments supplied by the caller. |
+| `GematriaError` | Failure during gematria computation. |
+| `RegexpError` | Internal regexp state is unexpectedly nil. |
+| `ParseError` | Failure during string parsing or calculation. |
+| `CleanError` | Failure while cleaning/normalising a substring. |
+
+<Note>
+  `CleanError` has no corresponding exported sentinel variable. It is reserved for internal use by `cleanSubstring`.
+</Note>

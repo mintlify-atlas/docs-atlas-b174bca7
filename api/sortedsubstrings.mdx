@@ -1,0 +1,136 @@
+---
+title: "SortedSubstrings"
+description: "Retrieve substrings sorted by occurrence frequency."
+---
+
+`SortedSubstrings` snapshots all entries from `tt.Substrings`, resolves each `*atomic.Int32` counter to a plain `int`, and returns a slice sorted by occurrence count in descending order. It is the idiomatic way to iterate substrings when order by frequency matters, and it is used internally by `String`.
+
+## Signature
+
+```go
+func (tt *Textee) SortedSubstrings() SortedStringQuantities
+```
+
+## Parameters
+
+This method takes no parameters beyond the receiver.
+
+## Return value
+
+<ResponseField name="SortedStringQuantities" type="SortedStringQuantities">
+  A `[]SubstringQuantity` slice sorted by `Quantity` descending. The slice is a snapshot — mutations to `tt.Substrings` after the call do not affect the returned slice.
+</ResponseField>
+
+## Types
+
+### SortedStringQuantities
+
+```go
+type SortedStringQuantities []SubstringQuantity
+```
+
+`SortedStringQuantities` implements `sort.Interface` (`Len`, `Swap`, `Less`) where `Less` sorts by `Quantity` in **descending** order:
+
+```go
+func (sq SortedStringQuantities) Less(i, j int) bool {
+    return sq[i].Quantity > sq[j].Quantity
+}
+```
+
+### SubstringQuantity
+
+```go
+type SubstringQuantity struct {
+    Substring string `json:"s"`
+    Quantity  int    `json:"q"`
+}
+```
+
+| Field | JSON key | Description |
+|-------|----------|-------------|
+| `Substring` | `"s"` | The cleaned, lowercased n-gram string |
+| `Quantity` | `"q"` | Number of times the substring appeared in the input |
+
+## Behavior
+
+1. Acquires `tt.mu.RLock()` to allow concurrent reads while blocking writes.
+2. Iterates `tt.Substrings`, calling `.Load()` on each `*atomic.Int32` to read the current count.
+3. Appends a `SubstringQuantity` to the local slice for each entry.
+4. Releases the read lock.
+5. Calls `sort.Sort` on the slice.
+6. Returns the sorted slice.
+
+<Note>
+  Ties in quantity are sorted in undefined (map iteration) order, since Go map iteration is intentionally randomized. Do not rely on a stable secondary ordering for substrings with equal counts.
+</Note>
+
+## Iterating all results
+
+```go
+tt, err := textee.NewTextee("All right, let's move. All right, move now.")
+if err != nil {
+    // handle error
+}
+
+for _, item := range tt.SortedSubstrings() {
+    fmt.Printf("%q: %d\n", item.Substring, item.Quantity)
+}
+```
+
+Example output (partial, most frequent first):
+
+```txt
+"all right": 2
+"move": 2
+"all": 2
+"right": 2
+"all right move": 1
+"right move": 1
+"right move now": 1
+...
+```
+
+## Accessing the top-N results
+
+```go
+sorted := tt.SortedSubstrings()
+
+topN := 10
+if len(sorted) < topN {
+    topN = len(sorted)
+}
+
+for _, item := range sorted[:topN] {
+    fmt.Printf("%q: %d\n", item.Substring, item.Quantity)
+}
+```
+
+## Filtering by minimum count
+
+```go
+for _, item := range tt.SortedSubstrings() {
+    if item.Quantity < 2 {
+        // The slice is sorted descending, so once Quantity drops below
+        // the threshold all remaining entries are also below it.
+        break
+    }
+    fmt.Printf("%q appears %d time(s)\n", item.Substring, item.Quantity)
+}
+```
+
+## Using results with gematria scores
+
+```go
+for _, item := range tt.SortedSubstrings() {
+    g, ok := tt.Gematrias[item.Substring]
+    if !ok {
+        continue
+    }
+    fmt.Printf("%q: count=%d english=%d simple=%d\n",
+        item.Substring, item.Quantity, g.English, g.Simple)
+}
+```
+
+<Tip>
+  `SortedSubstrings` is safe to call concurrently with other read operations on the same `Textee`. It acquires only a read lock, so multiple goroutines can call it simultaneously without blocking each other.
+</Tip>

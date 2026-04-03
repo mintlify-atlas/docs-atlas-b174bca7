@@ -1,0 +1,132 @@
+---
+title: "Introduction"
+description: "What Textee is, how it works, and when to use it."
+---
+
+Textee is a Go library for analyzing text through **substring n-gram extraction** and optional **gematria scoring**. Give it any string and it will split the text into sentences, generate every 1-, 2-, and 3-word combination, count how often each appears, and — if you want — compute six different numeric cipher scores for each substring.
+
+<Note>
+  Textee requires Go 1.21 or later and is licensed under Apache 2.0. The current version is **v1.0.1**.
+</Note>
+
+## What it does
+
+At its core, Textee turns unstructured text into a frequency map of substrings. The input:
+
+```txt
+All right let's move from this point.
+```
+
+Produces substrings including:
+
+```txt
+all: 1
+all right: 1
+all right lets: 1
+right: 1
+right lets: 1
+right lets move: 1
+move: 1
+...
+```
+
+Every substring is normalized to lowercase and stripped of punctuation so that `"right,"`, `"Right"`, and `"right"` all count as the same token.
+
+## Why use Textee
+
+Textee is useful wherever you need to understand which phrases recur in a body of text, without reaching for a full NLP framework.
+
+**Natural language processing pre-processing** — identify the most common 1-, 2-, and 3-word phrases in a corpus before feeding data into a model. The sorted output gives you a ranked frequency list with no extra tooling required.
+
+**Pattern recognition** — scan logs, user input, or documents for repeated phrases. Because processing runs concurrently per sentence, it stays fast even on large inputs.
+
+**Data mining** — extract structured frequency data from unstructured text. The `Substrings` map and `SortedSubstrings()` slice are easy to serialize and query.
+
+**Cryptographic text analysis** — the optional gematria layer assigns each substring a numeric score under six different cipher systems. This makes it straightforward to find all substrings that share a given score, or to rank phrases by their cipher values.
+
+## How it works
+
+Textee processes text in four stages:
+
+**1. Sentence splitting** — the input is split into sentences using a regular expression that matches on `.`, `!`, and `?`. If no sentence boundaries are found, the entire input is treated as one sentence.
+
+**2. Concurrent n-gram extraction** — each sentence is dispatched to its own goroutine. Within each goroutine, every window of 1, 2, and 3 consecutive words is extracted, cleaned (non-alphanumeric characters removed), and lowercased.
+
+**3. Atomic occurrence counting** — substrings are stored in a `map[string]*atomic.Int32`. Writes are protected by a `sync.RWMutex` so that concurrent goroutines can safely increment counts without data races.
+
+**4. Optional gematria scoring** — calling `CalculateGematria()` iterates over every substring and computes scores under six cipher systems via the `go-gematria` dependency. Results are stored in `Gematrias` (per-substring scores) and in six score-indexed maps (`ScoresEnglish`, `ScoresJewish`, `ScoresSimple`, `ScoresMystery`, `ScoresMajestic`, `ScoresEights`) that let you look up all substrings sharing a given score value.
+
+## The two core workflows
+
+### Substring frequency analysis
+
+Call `NewTextee` and work with `tt.Substrings` or `tt.SortedSubstrings()`. Gematria scores for all substrings are always computed by `NewTextee` — they are available in `tt.Gematrias` and the six score maps immediately after construction.
+
+```go
+tt, err := textee.NewTextee(inputString)
+if err != nil {
+    log.Fatal(err)
+}
+for _, sq := range tt.SortedSubstrings() {
+    fmt.Printf("%s: %d\n", sq.Substring, sq.Quantity)
+}
+```
+
+### Substring analysis with explicit gematria re-scoring
+
+If you call `ParseString` directly on an existing `*Textee` to replace its substrings, the gematria maps are not automatically updated. In that case call `CalculateGematria()` afterwards to rescore. Every substring in `tt.Substrings` gets scored under all six ciphers. You can then look up scores per substring via `tt.Gematrias`, or find all substrings sharing a score value via the `ScoresEnglish`, `ScoresJewish`, and similar maps.
+
+```go
+tt, err := textee.NewTextee(inputString)
+if err != nil {
+    log.Fatal(err)
+}
+tt, err = tt.CalculateGematria()
+if err != nil {
+    log.Fatal(err)
+}
+// Print the full report: substrings with all six cipher scores
+fmt.Println(tt)
+```
+
+<Note>
+  `NewTextee` already calls `CalculateGematria` internally before returning. Calling it again on the result is valid but redundant unless you have re-parsed the input with `ParseString`.
+</Note>
+
+## The six gematria ciphers
+
+When gematria scoring is active, each substring receives a score under six systems:
+
+| Field      | Description                            |
+| ---------- | -------------------------------------- |
+| `English`  | Standard English gematria (A=6, B=12…) |
+| `Jewish`   | Hebrew/Jewish cipher values            |
+| `Simple`   | Simple English (A=1, B=2…)             |
+| `Mystery`  | Mystery school cipher                  |
+| `Majestic` | Majestic cipher variant                |
+| `Eights`   | Eights-based cipher                    |
+
+Score lookup maps (`ScoresEnglish`, etc.) are indexed by `uint64` score value and contain slices of all substrings that share that score, making reverse lookup fast.
+
+## Dependencies
+
+Textee has a single external dependency:
+
+- [`github.com/andreimerlescu/gematria`](https://github.com/andreimerlescu/gematria) — provides the `Gematria` struct and `NewGematria` constructor used for all cipher scoring. Licensed under Apache 2.0.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Install Textee and run your first analysis in minutes.
+  </Card>
+  <Card title="Substring analysis" icon="layer-group" href="/guides/substring-analysis">
+    Learn how n-gram extraction and occurrence counting work in detail.
+  </Card>
+  <Card title="Gematria guide" icon="calculator" href="/guides/gematria">
+    Explore the six cipher systems and how to query scores.
+  </Card>
+  <Card title="Concurrency" icon="bolt" href="/guides/concurrency">
+    Understand how Textee uses goroutines and atomic counters safely.
+  </Card>
+</CardGroup>

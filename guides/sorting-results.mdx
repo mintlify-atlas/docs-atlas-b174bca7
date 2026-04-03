@@ -1,0 +1,148 @@
+---
+title: "Sorting Results"
+description: "How to retrieve and sort substring results by occurrence frequency."
+---
+
+After `NewTextee` processes your input, results live in `tt.Substrings` as an unordered `map[string]*atomic.Int32`. Textee provides `SortedSubstrings()` to materialize a stable, frequency-ordered slice from that map whenever you need ranked output.
+
+## The types involved
+
+```go
+type SubstringQuantity struct {
+    Substring string `json:"s"`
+    Quantity  int    `json:"q"`
+}
+
+type SortedStringQuantities []SubstringQuantity
+```
+
+`SortedStringQuantities` implements `sort.Interface` so that `sort.Sort` can order it:
+
+```go
+// Len is part of sort.Interface.
+func (sq SortedStringQuantities) Len() int { return len(sq) }
+
+// Swap is part of sort.Interface.
+func (sq SortedStringQuantities) Swap(i, j int) { sq[i], sq[j] = sq[j], sq[i] }
+
+// Less is part of sort.Interface. Higher quantity sorts first.
+func (sq SortedStringQuantities) Less(i, j int) bool {
+    return sq[i].Quantity > sq[j].Quantity
+}
+```
+
+<Note>
+`Less` returns `true` when `sq[i].Quantity > sq[j].Quantity`. This reverses the natural order so that `sort.Sort` produces a **descending** sequence — the most frequent substring is always at index 0.
+</Note>
+
+## How `SortedSubstrings()` works
+
+```go
+func (tt *Textee) SortedSubstrings() SortedStringQuantities {
+    tt.mu.RLock()
+    defer tt.mu.RUnlock()
+
+    var sortedQuantities SortedStringQuantities
+    for k, v := range tt.Substrings {
+        quantity := int(v.Load())
+        sortedQuantities = append(sortedQuantities, SubstringQuantity{
+            Substring: k,
+            Quantity:  quantity,
+        })
+    }
+    sort.Sort(sortedQuantities)
+    return sortedQuantities
+}
+```
+
+The method acquires a **read lock** (`tt.mu.RLock()`) before iterating over the map, so it is safe to call from multiple goroutines simultaneously after construction. Each `*atomic.Int32` is resolved to a plain `int` via `.Load()` at the moment the method runs — the returned slice is a snapshot, not a live view.
+
+## Iterating over sorted results
+
+```go
+tt, err := textee.NewTextee(inputString)
+if err != nil {
+    log.Fatal(err)
+}
+
+for _, item := range tt.SortedSubstrings() {
+    fmt.Printf("%q appears %d time(s)\n", item.Substring, item.Quantity)
+}
+```
+
+`item.Substring` is the cleaned, lowercased n-gram. `item.Quantity` is the occurrence count resolved at the time of the call.
+
+## Finding the top N most common substrings
+
+Slice the returned `SortedStringQuantities` directly — the slice is already in descending order:
+
+```go
+func topN(tt *textee.Textee, n int) textee.SortedStringQuantities {
+    sorted := tt.SortedSubstrings()
+    if n > len(sorted) {
+        n = len(sorted)
+    }
+    return sorted[:n]
+}
+
+// Usage
+top5 := topN(tt, 5)
+for rank, item := range top5 {
+    fmt.Printf("#%d %q — %d occurrences\n", rank+1, item.Substring, item.Quantity)
+}
+```
+
+## Filtering by minimum occurrence count
+
+Because `SortedStringQuantities` is sorted descending, you can break out of the loop as soon as the count drops below your threshold:
+
+```go
+const minCount = 2
+
+for _, item := range tt.SortedSubstrings() {
+    if item.Quantity < minCount {
+        break // all remaining items have an equal or lower count
+    }
+    fmt.Printf("%q: %d\n", item.Substring, item.Quantity)
+}
+```
+
+Alternatively, collect matching items into a new slice:
+
+```go
+func filterByMinCount(tt *textee.Textee, min int) textee.SortedStringQuantities {
+    var result textee.SortedStringQuantities
+    for _, item := range tt.SortedSubstrings() {
+        if item.Quantity >= min {
+            result = append(result, item)
+        }
+    }
+    return result
+}
+```
+
+## Contrasting with direct map iteration
+
+Direct iteration over `tt.Substrings` is faster — it skips the sort — but Go map iteration order is randomized on every run:
+
+```go
+// Unordered, but avoids the sort allocation
+for substring, counter := range tt.Substrings {
+    fmt.Printf("%q: %d\n", substring, counter.Load())
+}
+```
+
+<Warning>
+Direct map iteration is not protected by a lock. If any goroutine might still be writing to `tt.Substrings` (i.e., `ParseString` is still running), concurrent reads are a data race. After `NewTextee` returns, the map is safe to read — but you are responsible for your own synchronization if you call `ParseString` again on an existing `*Textee`.
+</Warning>
+
+Use `SortedSubstrings()` when you need:
+
+- A deterministic ordering across runs.
+- Concurrent read safety (the read lock is held for you).
+- A ranked slice you can slice or filter.
+
+Use direct map access when you need:
+
+- Maximum throughput for single-goroutine post-construction reads.
+- Lookup by a specific known key (e.g., `tt.Substrings["hello"].Load()`).

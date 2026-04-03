@@ -1,80 +1,198 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Quick Start"
+description: "Install Textee and run your first text analysis in minutes."
 ---
 
-## Get started in three steps
+## Prerequisites
 
-Get your documentation site running locally and make your first customization.
+- Go 1.21 or later
+- A Go module initialized with `go mod init`
 
-### Step 1: Set up your local environment
+## Installation and first analysis
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<Steps>
+  <Step title="Install the package">
+    Add Textee to your module with `go get`:
 
-### Step 2: Deploy your changes
+    ```bash
+    go get -u github.com/andreimerlescu/textee
+    ```
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    This also fetches the single dependency, `github.com/andreimerlescu/gematria`.
+  </Step>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+  <Step title="Create your program">
+    Create a `main.go` file with the following complete example. It uses the same input text shown in the README so you can verify your output matches.
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```go
+    package main
 
-### Step 3: Go live
+    import (
+        "fmt"
+        "os"
+        "errors"
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+        "github.com/andreimerlescu/textee"
+    )
+
+    const inputString = `All right let's move from this point on 16 March 84, let's move in time to our second location which is a specific building near where you are now. Are you ready? Just a minute. All. right, I will wait. All right, move now from this area to the front ground level of the building known as the Menara Building, to the front of, on the ground, the Menara Building.`
+
+    func main() {
+        tt, err := textee.NewTextee(inputString)
+        if err != nil {
+            _,_ = fmt.Fprintf(os.Stderr, "%v", errors.Join(textee.ErrBadParsing, err))
+        }
+
+        var err2 error
+        tt, err2 = tt.CalculateGematria()
+        if err2 != nil {
+            _,_ = fmt.Fprintf(os.Stderr, "%v", errors.Join(textee.ErrBadParsing, err2))
+        }
+        for substring, quantity := range tt.Substrings {
+            fmt.Printf("substring '%v' has %d occurrences\n", substring, quantity.Load())
+        }
+
+        sortedSubstrings := tt.SortedSubstrings()
+        for idx, substring := range sortedSubstrings {
+            fmt.Printf("%d: substring '%v' has %d occurrences\n", idx, substring.Substring, substring.Quantity)
+        }
+    }
+    ```
+
+    <Note>
+      `NewTextee` already runs `CalculateGematria` internally. The explicit call to `tt.CalculateGematria()` here is from the README example and is valid — it re-scores the substrings in place. In production code you can omit it unless you have called `ParseString` again after construction.
+    </Note>
+  </Step>
+
+  <Step title="Run it">
+    ```bash
+    go run main.go
+    ```
+
+    The first loop prints substrings in map iteration order (non-deterministic). The second loop, using `SortedSubstrings()`, prints them ranked from most to least frequent.
+
+    A portion of the sorted output looks like this (exact occurrence counts depend on sentence boundary detection; highest-frequency substrings appear first):
+
+    ```txt
+    0: substring 'the' has 5 occurrences
+    1: substring 'building' has 4 occurrences
+    2: substring 'the menara' has 3 occurrences
+    3: substring 'the menara building' has 3 occurrences
+    4: substring 'menara building' has 3 occurrences
+    5: substring 'menara' has 3 occurrences
+    6: substring 'move' has 3 occurrences
+    7: substring 'lets move' has 2 occurrences
+    8: substring 'lets' has 2 occurrences
+    9: substring 'front' has 2 occurrences
+    ...
+    ```
+
+    Substrings with the same count are grouped together but their relative order within a group is not guaranteed.
+  </Step>
+</Steps>
+
+## Understanding the output
+
+### The `Substrings` map
+
+`tt.Substrings` is a `map[string]*atomic.Int32`. The key is the cleaned, lowercased substring. The value is an `*atomic.Int32` — call `.Load()` to read it as an integer.
+
+```go
+count := tt.Substrings["menara building"].Load() // returns 3
+```
+
+All punctuation is stripped and text is lowercased during extraction, so `"Building,"`, `"building"`, and `"BUILDING"` all map to the same key `"building"`.
+
+### `SortedSubstrings()`
+
+This method returns a `SortedStringQuantities` — a slice of `SubstringQuantity` structs sorted by `Quantity` in descending order.
+
+```go
+type SubstringQuantity struct {
+    Substring string
+    Quantity  int
+}
+```
+
+Use this when you want results ranked by frequency. The `*atomic.Int32` values are resolved to plain `int` at the time `SortedSubstrings()` is called.
+
+### Gematria score maps
+
+After `CalculateGematria()`, each substring also has scores in `tt.Gematrias`:
+
+```go
+score := tt.Gematrias["menara building"]
+fmt.Println(score.English, score.Jewish, score.Simple)
+```
+
+The six score-indexed maps (`tt.ScoresEnglish`, `tt.ScoresJewish`, `tt.ScoresSimple`, `tt.ScoresMystery`, `tt.ScoresMajestic`, `tt.ScoresEights`) let you do reverse lookups — find every substring that scores a specific value:
+
+```go
+// All substrings with an English gematria score of 444
+matches := tt.ScoresEnglish[444]
+```
+
+### The `String()` method
+
+Calling `fmt.Println(tt)` invokes `tt.String()`, which prints each substring with its count and all six cipher scores on one line:
+
+```txt
+"the menara building": 3 [English N] [Jewish N] [Simple N] [Mystery N] [Majestic N] [Eights N]
+```
+
+The exact numeric scores depend on the cipher algorithms in the `go-gematria` library. The verified test case from the source is: `"manifesting"` scores English=702, Jewish=337, Simple=117.
+
+## Common errors
+
+### `ErrEmptyInput`
+
+Returned by `NewTextee` when called with no arguments or a nil input.
+
+```go
+tt, err := textee.NewTextee()
+// err == textee.ErrEmptyInput
+```
+
+**Fix:** always pass at least one non-empty string to `NewTextee`.
+
+### `ErrBadParsing`
+
+A sentinel error that wraps underlying parse failures. It is returned (via `errors.Join`) when sentence splitting or substring cleaning fails.
+
+```go
+if err != nil {
+    if errors.Is(err, textee.ErrBadParsing) {
+        // inspect the wrapped error for details
+        fmt.Fprintln(os.Stderr, err)
+    }
+}
+```
+
+**Fix:** use `errors.Is` or `errors.As` to unwrap and inspect the root cause. In practice this error only occurs if the compiled regular expressions are somehow nil, which should not happen in normal use.
+
+<Warning>
+  Do not ignore errors from `NewTextee` and then dereference the returned pointer — it will be `nil` on error and your program will panic.
+</Warning>
+
+### `ErrGematriaParse`
+
+Returned by `CalculateGematria()` if the gematria library fails to score a substring. The error counter accumulates all failures and they are joined into a single error on return.
+
+```go
+tt, err = tt.CalculateGematria()
+if err != nil {
+    // one or more substrings could not be scored
+    fmt.Fprintln(os.Stderr, err)
+}
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Understand the full processing pipeline and design decisions.
+  </Card>
+  <Card title="Gematria guide" icon="calculator" href="/guides/gematria">
+    Learn how to use the six cipher systems and score maps.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

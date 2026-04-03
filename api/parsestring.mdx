@@ -1,0 +1,147 @@
+---
+title: "ParseString"
+description: "Parse a string into substrings and count occurrences."
+---
+
+`ParseString` takes a single string, splits it into sentences, tokenizes each sentence into words, generates 1-, 2-, and 3-word n-grams, cleans them, and stores occurrence counts in `tt.Substrings`. It is called automatically by `NewTextee`, but you can call it directly when you want to re-parse a `Textee` with new input without constructing a new one.
+
+## Signature
+
+```go
+func (tt *Textee) ParseString(input string) (*Textee, error)
+```
+
+## Parameters
+
+<ParamField path="input" type="string" required>
+  The text to parse. The string is first split into sentences using the regex `(?m)([^.!?]*[.!?])(?:\s|$)`. If no sentence boundaries are found, the entire string is treated as a single sentence.
+</ParamField>
+
+## Return values
+
+<ResponseField name="*Textee" type="*Textee">
+  The same receiver (`tt`) on success, allowing method chaining. `tt.Substrings` is fully replaced with the new results.
+</ResponseField>
+
+<ResponseField name="error" type="error">
+  Non-nil if sentence splitting fails (returns `ErrBadParsing` joined with the underlying `CleanError`). In practice this only occurs if the compiled regex is somehow `nil`, which should never happen under normal conditions.
+</ResponseField>
+
+## Behavior
+
+### Sentence splitting
+
+`ParseString` uses a pre-compiled package-level regex to locate sentence boundaries:
+
+```go
+var regFindSentences = regexp.MustCompile(`(?m)([^.!?]*[.!?])(?:\s|$)`)
+```
+
+Each match is trimmed of surrounding whitespace. If the regex returns no matches, the entire input is kept as one sentence and processing continues normally.
+
+### N-gram generation
+
+For each sentence, `ParseString` calls `strings.Fields` to tokenize into words, then iterates every word position `i` and generates windows of 1, 2, and 3 words starting at `i`:
+
+```
+words[i:i+1]   // 1-gram
+words[i:i+2]   // 2-gram (when available)
+words[i:i+3]   // 3-gram (when available)
+```
+
+### Cleaning
+
+Each n-gram is cleaned before storage:
+
+1. All characters outside `[a-zA-Z0-9\s]` are stripped.
+2. The result is lowercased.
+3. Leading and trailing whitespace is trimmed.
+4. Empty strings after cleaning are discarded.
+
+### Concurrency
+
+One goroutine is launched per sentence. A `sync.WaitGroup` ensures all goroutines finish before the method returns. Occurrence counts are incremented via `atomic.Int32.Add(1)` inside a mutex-guarded critical section, making the map safe for concurrent writes.
+
+### Reset behavior
+
+<Warning>
+  `ParseString` replaces `tt.Substrings` with a fresh empty map at the start of every call. Any previously parsed substrings are permanently discarded. If you need to preserve earlier results, copy them before calling `ParseString` again.
+</Warning>
+
+### Gematria is not recomputed
+
+<Note>
+  `ParseString` only populates `tt.Substrings`. It does **not** update `tt.Gematrias` or any of the six score maps. Call `CalculateGematria` separately after `ParseString` if you need up-to-date gematria scores.
+</Note>
+
+## Basic usage
+
+```go
+package main
+
+import (
+    "fmt"
+    "sync/atomic"
+
+    "github.com/andreimerlescu/textee"
+)
+
+func main() {
+    tt, err := textee.NewTextee("placeholder")
+    if err != nil {
+        // handle error
+    }
+
+    // Re-parse with new input; previous substrings are discarded.
+    tt, err = tt.ParseString("All right, let's move from this point.")
+    if err != nil {
+        // handle error
+    }
+
+    for substring, counter := range tt.Substrings {
+        fmt.Printf("%q: %d\n", substring, counter.Load())
+    }
+}
+```
+
+## Chaining with CalculateGematria
+
+```go
+tt, err := textee.NewTextee("initial input")
+if err != nil {
+    // handle error
+}
+
+tt, err = tt.ParseString("manifesting three six nine")
+if err != nil {
+    // handle error
+}
+
+// Re-run gematria scoring for the new substrings.
+tt, err = tt.CalculateGematria()
+if err != nil {
+    // handle error
+}
+
+fmt.Println(tt)
+```
+
+## Example output
+
+Given the input `"All right, let's move."`, a subset of the entries written to `tt.Substrings` would be:
+
+```txt
+"all":           1
+"all right":     1
+"all right lets": 1
+"right":         1
+"right lets":    1
+"right lets move": 1
+"lets":          1
+"lets move":     1
+"move":          1
+```
+
+<Tip>
+  To retrieve the substrings sorted by frequency, use `SortedSubstrings` after `ParseString` returns.
+</Tip>
